@@ -1,66 +1,104 @@
-/**
- * @author Tohar Markovich
- * main connects LEDs to PC0, PC1, and PC2, outputting a counter from 0 to 7
- * repeated when PA4 is pulled down
- */
-
-
 #include "main.h"
+#include "adc_helpers.h"
+#include "tim2.h"
 
-#define BIT4 0x0010 // bit 4 logic high
-#define DELAY 400 // software delay
-#define PC_MASK 0x3 // mask used to reset PC0, PC1, and PC2
-#define PC2_SHIFT 4 // shift 4 to access PC2 MODER (2 bits, RW)
-#define PA4_SHIFT 8 // shift 8 to access PA4 MODER (2 bits, RW)
-#define PUPDR_SHIFT 8 // shift 8 to access PA4 PUPDR (2 bits, RW)
-#define MAX_COUNT 0x7 // max count, used for counter and to reset LED bits
+volatile uint16_t adc_value;
+volatile float converted;
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
 
 int main(void)
 {
-	// turns on clock to GPIO banks A and C
-  RCC->AHB2ENR |= (RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOCEN);
 
-  // bank C as GPIO mode
-  //GPIOC->MODER &= ~(GPIO_MODER_MODE13);
- // GPIOC->PUPDR &= ~(GPIO_PUPDR_PUPD13);
+	HAL_Init();
 
-  /* configure PC0 PC1 PC2 as output */
+	SystemClock_Config(); //32Mhz clock.
 
-  /* PC0 */
-  GPIOC->MODER &= ~PC_MASK;
-  GPIOC->MODER |= 1;
-
-  /* PC1 */
-  GPIOC->MODER &= ~(PC_MASK << 2);
-  GPIOC->MODER |= (1 << 2);
-
-  /* PC2 */
-  GPIOC->MODER &= ~(PC_MASK << PC2_SHIFT);
-  GPIOC->MODER |= BIT4;
-
-  // configure button for input
-  GPIOA->MODER &= ~(GPIO_MODER_MODE4);
-
-  GPIOA->PUPDR &= ~(PC_MASK << PA4_SHIFT);
-  GPIOA->PUPDR |= (1 << PUPDR_SHIFT);
-
-  // to supply 3.3V, need PC0 PC1 PC2 low in logic
-
-  uint8_t counter = 0;
-
-  HAL_Init();
-
-  while (1) {
-	  if (!(GPIOA->IDR & BIT4)) { // if PA4 pulled low
-		  GPIOC->ODR &= ~MAX_COUNT; // reset PC0, PC1, PC2
-		  GPIOC->ODR |= (counter & MAX_COUNT); // set PC0, PC1, PC2 based on counter
-		  // adjust counter, only requires setting to 0 after the count reaches 7
-		  if (counter != MAX_COUNT) counter = (counter % MAX_COUNT) + 1;
-		  else counter = 0;
-	  }
-	  HAL_Delay(DELAY); // software delay
-  }// end while
-
-}// end main
+	ADC_Init();
+	init_tim2();
 
 
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+	  uint16_t latest = adc_buffer[(BUFFER_SIZE - DMA1_Channel1->CNDTR) & (BUFFER_SIZE - 1)];
+
+	  adc_value = latest;
+	  converted = latest/4096.0*3.3;
+	  HAL_Delay(100);
+  }
+}
+
+
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Configure the main internal regulator output voltage
+  */
+  if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
+  //RCC_OscInitStruct.MSIState = RCC_MSI_ON;  //datasheet says NOT to turn on the MSI then change the frequency.
+  RCC_OscInitStruct.MSICalibrationValue = 0;
+  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_10;
+	/* from stm32l4xx_hal_rcc.h
+	#define RCC_MSIRANGE_0                 MSI = 100 KHz
+	#define RCC_MSIRANGE_1                 MSI = 200 KHz
+	#define RCC_MSIRANGE_2                 MSI = 400 KHz
+	#define RCC_MSIRANGE_3                 MSI = 800 KHz
+	#define RCC_MSIRANGE_4                 MSI = 1 MHz
+	#define RCC_MSIRANGE_5                 MSI = 2 MHz
+	#define RCC_MSIRANGE_6                 MSI = 4 MHz
+	#define RCC_MSIRANGE_7                 MSI = 8 MHz
+	#define RCC_MSIRANGE_8                 MSI = 16 MHz
+	#define RCC_MSIRANGE_9                 MSI = 24 MHz
+	#define RCC_MSIRANGE_10                MSI = 32 MHz
+	#define RCC_MSIRANGE_11                MSI = 48 MHz   dont use this one*/
+  RCC_OscInitStruct.MSIState = RCC_MSI_ON;  //datasheet says NOT to turn on the MSI then change the frequency.
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
