@@ -17,10 +17,9 @@
 #define PI 3.14159265358979323846264338327950288
 #endif
 
-#define q 9 // 512 amplitudes
+#define q 12 // 4096 amplitudes
 #define N (1<<q)
 
-void fft(float*, uint32_t, float*);
-float get_highest_fft();
+void fft(float*, float*, uint32_t, float*);
 
 #endif /* SRC_FFT_H_ */
