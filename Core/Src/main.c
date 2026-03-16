@@ -1,127 +1,286 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include <math.h>
 #include "main.h"
 #include "adc_helpers.h"
 #include "tim2.h"
 #include "fft.h"
-#include "pid.h"
+#include "fft_scheduler.h"
+#include "PWM.h"
+#include "PID.h"
+#include "song_player.h"
 
-volatile uint16_t adc_value;
-volatile float converted;
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-static PIDController pid = {
-    .Kp           = 1.0f,
-    .Ki           = 0.1f,
-    .Kd           = 0.01f,
-    .target_freq  = 500.0f,
-    .last_freq    = 0.0f,
-    .dt           = PID_DT,
-    .integral_sum = 0.0f,
-    .output       = 0.0f,
+/* --- do_re_mi song (Do = A4 = 440 Hz) --- */
+/* Scale used: A major-ish mapping for solfège:
+   Do = A4  (440.00)
+   Re = B4  (493.88)
+   Mi = C#5 (554.37)
+   Fa = D5  (587.33)
+   Sol = E5 (659.25)
+   La = F#5 (739.99)
+   Ti = G#5 (830.61)
+   Do' = A5 (880.00)
+*/
+
+/* Use the SongNote type from song_player.h */
+static const SongNote do_re_mi[] = {
+    /* "Do — a deer, a female deer" */
+    { 440.00f, 2.0f },   /* Do  quarter */
+    { 493.88f, 1.0f },   /* Re  half (a / deer) */
+
+    { 554.37f, 2.0f },   /* Mi  quarter */
+    { 440.00f, 1.0f },   /* Do  quarter */
+    { 554.37f, 2.0f },   /* Mi  quarter */
+    { 440.00f, 1.0f },   /* Do  quarter */
+    { 554.37f, 3.0f },   /* Mi  quarter */
+
+    { 493.88f, 2.0f },   /* Re  half (a female deer) */
+    { 554.37f, 1.0f },   /* Mi  half (a drop of) */
+	{ 587.33f, 2.0f },   /*Fa*/
+    { 554.37f, 1.0f },   /* Mi  half (a drop of) */
+    { 493.88f, 1.0f },   /* Re  half (a female deer) */
+	{ 587.33f, 2.0f },   /*Fa*/
+
+    { 554.37f, 2.0f },   /* Mi  half (a drop of) */
+	{ 587.33f, 1.0f },   /*Fa*/
+    { 659.25f, 2.0f },   /* Sol quarter */
+    { 554.37f, 1.0f },   /* Mi  half (a drop of) */
+    { 659.25f, 2.0f },   /* Sol quarter */
+    { 554.37f, 1.0f },   /* Mi  half (golden sun) */
+    { 659.25f, 2.0f },   /* Sol quarter */
+
+	{ 587.33f, 2.0f },   /*Fa*/
+    { 659.25f, 1.0f },   /* Sol quarter */
+    { 739.99f, 2.0f },   /* LA quarter */
+    { 659.25f, 1.0f },   /* Sol quarter */
+	{ 587.33f, 1.0f },   /*Fa*/
+    { 739.99f, 2.0f },   /* LA quarter */
+
+    { 659.25f, 2.0f },   /* Sol quarter */
+    { 440.00f, 1.0f },   /* Do  quarter */
+    { 493.88f, 1.0f },   /* Re  half (a female deer) */
+    { 554.37f, 1.0f },   /* Mi  quarter */
+	{ 587.33f, 1.0f },   /*Fa*/
+    { 659.25f, 1.0f },   /* Sol quarter */
+    { 739.99f, 2.0f },   /* LA quarter */
+
+    { 739.99f, 2.0f },   /* LA quarter */
+	{ 493.88f, 1.0f },   /* Re  half (a female deer) */
+	{ 554.37f, 1.0f },   /* Mi  quarter */
+	{ 587.33f, 1.0f },   /*Fa*/
+	{ 659.25f, 1.0f },   /* Sol quarter */
+	{ 739.99f, 1.0f },   /* LA quarter */
+	{ 830.61f, 2.0f },   /*TI*/
+
+	{ 830.61f, 2.0f },   /*TI*/
+	{ 554.37f, 1.0f },   /* Mi  quarter */
+	{ 587.33f, 1.0f },   /*Fa*/
+	{ 659.25f, 1.0f },   /* Sol quarter */
+	{ 739.99f, 1.0f },   /* LA quarter */
+	{ 830.61f, 1.0f },   /*TI*/
+	{ 880.00f, 2.0f },   /*DOOO*/
+
+	{ 880.00f, 1.0f },   /*DOOO*/
+	{ 830.61f, 1.0f },   /*TI*/
+	{ 739.99f, 1.0f },   /* LA quarter */
+	{ 587.33f, 2.0f },   /*Fa*/
+	{ 830.61f, 1.0f },   /*TI*/
+	{ 659.25f, 2.0f },   /* Sol quarter */
+	{ 880.00f, 1.0f },   /*DOOO*/
+	{ 659.25f, 1.0f },   /* Sol quarter */
+	{ 554.37f, 1.0f },   /* Mi  quarter */
+	{ 493.88f, 1.0f },   /* Re  half (a female deer) */
+    { 440.00f, 1.0f },   /* Do  quarter */
 };
+static const size_t DO_RE_MI_LEN = sizeof(do_re_mi) / sizeof(do_re_mi[0]);
 
-static float win_buf[N];
-static int   win_write = 0;
-static int   new_count = 0;
 
-static float fft_re[N];
-static float fft_im[N];
-static float fft_tmp[2 * N];
+/* Use the SongNote type from song_player.h */
+static const SongNote twinkle[] = {
+    /* "Do — a deer, a female deer" */
+    { 440.00f, 1.0f },   /* Do  quarter */
+    { 440.00f, 1.0f },   /* Do  quarter */
+    { 659.25f, 1.0f },   /* Sol quarter */
 
-static uint32_t adc_read_idx = 0;
+    { 554.37f, 2.0f },   /* Mi  quarter */
+    { 440.00f, 1.0f },   /* Do  quarter */
+    { 554.37f, 3.0f },   /* Mi  quarter */
 
-static void set_pwm_duty(float pid_output)
+    { 493.88f, 2.0f },   /* Re  half (a female deer) */
+    { 554.37f, 1.0f },   /* Mi  half (a drop of) */
+	{ 587.33f, 2.0f },   /*Fa*/
+    { 554.37f, 1.0f },   /* Mi  half (a drop of) */
+    { 493.88f, 1.0f },   /* Re  half (a female deer) */
+	{ 587.33f, 2.0f },   /*Fa*/
+
+    { 554.37f, 2.0f },   /* Mi  half (a drop of) */
+	{ 587.33f, 1.0f },   /*Fa*/
+    { 659.25f, 2.0f },   /* Sol quarter */
+    { 554.37f, 1.0f },   /* Mi  half (a drop of) */
+    { 659.25f, 2.0f },   /* Sol quarter */
+    { 554.37f, 1.0f },   /* Mi  half (golden sun) */
+    { 659.25f, 2.0f },   /* Sol quarter */
+
+	{ 587.33f, 2.0f },   /*Fa*/
+    { 659.25f, 1.0f },   /* Sol quarter */
+    { 739.99f, 2.0f },   /* LA quarter */
+    { 659.25f, 1.0f },   /* Sol quarter */
+	{ 587.33f, 1.0f },   /*Fa*/
+    { 739.99f, 2.0f },   /* LA quarter */
+
+    { 659.25f, 2.0f },   /* Sol quarter */
+    { 440.00f, 1.0f },   /* Do  quarter */
+    { 493.88f, 1.0f },   /* Re  half (a female deer) */
+    { 554.37f, 1.0f },   /* Mi  quarter */
+	{ 587.33f, 1.0f },   /*Fa*/
+    { 659.25f, 1.0f },   /* Sol quarter */
+    { 739.99f, 2.0f },   /* LA quarter */
+
+    { 739.99f, 2.0f },   /* LA quarter */
+	{ 493.88f, 1.0f },   /* Re  half (a female deer) */
+	{ 554.37f, 1.0f },   /* Mi  quarter */
+	{ 587.33f, 1.0f },   /*Fa*/
+	{ 659.25f, 1.0f },   /* Sol quarter */
+	{ 739.99f, 1.0f },   /* LA quarter */
+	{ 830.61f, 2.0f },   /*TI*/
+
+	{ 830.61f, 2.0f },   /*TI*/
+	{ 554.37f, 1.0f },   /* Mi  quarter */
+	{ 587.33f, 1.0f },   /*Fa*/
+	{ 659.25f, 1.0f },   /* Sol quarter */
+	{ 739.99f, 1.0f },   /* LA quarter */
+	{ 830.61f, 1.0f },   /*TI*/
+	{ 880.00f, 2.0f },   /*DOOO*/
+
+	{ 880.00f, 1.0f },   /*DOOO*/
+	{ 830.61f, 1.0f },   /*TI*/
+	{ 739.99f, 1.0f },   /* LA quarter */
+	{ 587.33f, 2.0f },   /*Fa*/
+	{ 830.61f, 1.0f },   /*TI*/
+	{ 659.25f, 2.0f },   /* Sol quarter */
+	{ 880.00f, 1.0f },   /*DOOO*/
+	{ 659.25f, 1.0f },   /* Sol quarter */
+	{ 554.37f, 1.0f },   /* Mi  quarter */
+	{ 493.88f, 1.0f },   /* Re  half (a female deer) */
+    { 440.00f, 1.0f },   /* Do  quarter */
+};
+static const size_t TWINKLE = sizeof(twinkle) / sizeof(twinkle[0]);
+
+PIDController flute_pid;
+
+/* single callback — player only sets the target (player won't mute) */
+static void set_target(uint16_t hz)
 {
-    uint32_t arr = TIM2->ARR;
-
-    if (pid_output < 0.0f)       pid_output = 0.0f;
-    if (pid_output > (float)arr) pid_output = (float)arr;
-
-    TIM2->CCR1 = (uint32_t)pid_output;
+    /* forward to your existing PID target setter */
+    PID_SetTarget(&flute_pid, hz);
 }
 
-static float dominant_frequency(void)
-{
-    float max_mag = 0.0f;
-    int   max_bin = 1;
-
-    for (uint32_t i = 1; i <= N / 2; i++) {
-        float mag = fft_re[i] * fft_re[i] + fft_im[i] * fft_im[i];
-        // && mag > (100/BIN_RES)
-        if (mag > max_mag) {
-            max_mag = mag;
-            max_bin = i;
-        }
-    }
-
-    return (float)max_bin * BIN_RES;
-}
-
-static void load_window_to_fft(void)
-{
-    for (uint32_t i = 0; i < N; i++) {
-        fft_re[i] = win_buf[(win_write + i) & (N - 1)];
-        fft_im[i] = 0.0f;
-    }
-}
-
-static void drain_adc_samples(void)
-{
-    uint32_t dma_write = (BUFFER_SIZE - DMA1_Channel1->CNDTR) & (BUFFER_SIZE - 1);
-
-    while (adc_read_idx != dma_write) {
-        uint16_t raw = adc_buffer[adc_read_idx];
-        adc_read_idx = (adc_read_idx + 1) & (BUFFER_SIZE - 1);
-
-        win_buf[win_write] = (raw / 4096.0f) * 2.0f - 1.0f;
-        win_write = (win_write + 1) & (N - 1);
-        new_count++;
-    }
-}
+static uint16_t goal_hz = 600;
 
 
-/* Private function prototypes -----------------------------------------------*/
+static uint16_t fft_input[BUFFER_SIZE];
+static uint16_t fft_mags[BUFFER_SIZE / 2];
+
+volatile float peak_freq;
 void SystemClock_Config(void);
-
-volatile float actual_freq;
 
 int main(void)
 {
+    HAL_Init();
+    SystemClock_Config();
 
-	HAL_Init();
-	SystemClock_Config();  /* 32 MHz */
-	ADC_Init();
-	init_tim2();
+    fft_mag_init();
+    ADC_Init();
+    init_tim2();
+    fft_scheduler_init();
+    pwm_init(20000);      // 50 Hz, both outputs start at 0%
 
-	/* Pre-fill the window before first FFT */
-	while (new_count < N) {
-		drain_adc_samples();
-	}
-	new_count = 0;
 
-	while (1)
-	{
-		/* 1. Pull new samples from DMA */
-		drain_adc_samples();
+    PID_Init(&flute_pid,
+             0.5f,     // Kp
+             0.0f,     // Ki
+             0.008f,    // Kd
+             0.016f,    // dt = 10 ms loop
+             -99.0f,  // output min
+             99.0f,   // output max
+             -50.0f,   // integral min
+             50.0f);   // integral max
 
-		/* 2. Only run FFT+PID once we have ADVANCE new samples (~20 ms) */
-		if (new_count >= ADVANCE) {
-			new_count = 0;
+    PID_SetTarget(&flute_pid, goal_hz);
 
-			/* 3. Snapshot sliding window into FFT arrays */
-			load_window_to_fft();
+    SongPlayer *player = SongPlayer_Init(set_target, 75);
+    SongPlayer_SetSong(player, do_re_mi, DO_RE_MI_LEN, 1);
+    SongPlayer_Start(player, 0);
 
-			/* 4. Run FFT */
-			fft(fft_re, fft_im, N, fft_tmp);
+    while (1)
+    {
+        uint16_t end_index;
+        uint16_t peak_bin;
+        float peak_bin_interp;
 
-			/* 5. Extract dominant frequency */
-			actual_freq = dominant_frequency();
+        fft_scheduler_poll();
+        SongPlayer_Poll(player);
 
-			/* 6. Run PID */
-			//PID_update(&pid, actual_freq);
+        if (fft_scheduler_take_pending_end_index(&end_index)) {
+            copy_latest_window(fft_input, end_index);
+            fft_compute_magnitudes_u16(fft_input, fft_mags);
 
-			/* 7. Apply to PWM */
-			//set_pwm_duty(pid.output);
-		}
-	}
+
+            peak_bin = fft_find_peak_bin(fft_mags, 1);
+            peak_bin_interp = fft_refine_peak_bin_parabolic(fft_mags, peak_bin);
+            peak_freq = (peak_bin_interp * SAMPLE_RATE_HZ) / BUFFER_SIZE;
+            if (peak_freq < 400 || peak_freq > 1500){
+            	update_duty_2(0);    // CH2 = 75%
+            	update_duty_1(0);
+            } else{
+            	float control;
+            	float duty;
+
+            	control = PID_Update(&flute_pid, peak_freq);
+            	duty = MAX(fabsf(control),25);
+
+
+            	if (control < 0.0f) {
+            		if(duty < 20){
+                	    update_duty_1(80);
+            		}
+            	    update_duty_1(duty);
+            	    update_duty_2(0.0f);
+            	}
+            	else if (control > 0.0f) {
+            		if(duty < 20){
+						update_duty_1(80);
+
+					}
+            	    update_duty_1(0.0f);
+            	    update_duty_2(duty);
+            	}
+            	else {
+            	    update_duty_1(0.0f);
+            	    update_duty_2(0.0f);
+            	}
+            }
+        }
+    }
 }
 
 

@@ -1,113 +1,147 @@
-/**
- * @file PWM.c
- * @brief Implementation of a tiny PWM helper for TIM3 CH2 (PA7) on STM32L4.
- * @author Noah
- * @version 1.1.0b+BasedOnv1.0.0Commit402f325
- * @author GitHub Copilot, GPT-4 mini, Ask mode
- * @author GitHub Copilot, GPT-5 mini, Agent mode
- *
- * The implementation programs TIM3/TIM3 to use a 1 MHz timebase (1 µs tick),
- * sets ARR and CCRx according to the requested period and duty cycle, and
- * starts the timer. GPIOA pin PA7 (AF1 TIM3_CH2) is configured by the respective
- * setup functions.
- */
-
 #include "PWM.h"
-#include "stm32l4xx_hal_tim.h"
 
-
-/**
- * This routine enables the GPIOA and TIM3 peripheral clocks, configures PA7
- * for alternate function TIM3_CH2 (AF1), programs the timer PSC so that the
- * timer ticks at 1 MHz (1 µs resolution), sets ARR and CCR1 according to the
- * requested period and duty cycle, configures the channel in PWM mode 1 with
- * preload enabled, forces an update to load shadow registers, and starts the
- * counter.
+/*
+ * Example pin mapping for many STM32L4 parts:
+ *   PA6 -> TIM3_CH1
+ *   PA7 -> TIM3_CH2
+ *
+ * Verify the exact AF mapping in your specific device datasheet.
  */
-PWMStatus setupPWM(uint32_t period_us, uint_fast16_t dutyCycle) {
-	// Check duty cycle
-	if (dutyCycle > PWM_MAX_DC_PC)
-		return PWM_DC_TOO_HIGH;
-	if (dutyCycle < PWM_MIN_DC_PC)
-		return PWM_DC_TOO_LOW;
 
-	// Enable GPIOA clock
-	RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
+/* Internal helper: convert 0..100% duty into CCR value */
+static uint32_t pwm_percent_to_ccr(uint8_t duty)
+{
+    uint32_t arr = TIM3->ARR + 1U;
 
-	// Configure PA7 as AF1 (TIM3_CH2)
-	GPIOA->MODER &= ~GPIO_MODER_MODE7_Msk;
-	GPIOA->MODER |= GPIO_MODER_MODE7_1; // AF mode (10)
-	GPIOA->OTYPER &= ~GPIO_OTYPER_OT7; // push-pull
-	GPIOA->PUPDR &= ~GPIO_PUPDR_PUPD7_Msk;
-	GPIOA->OSPEEDR |= GPIO_OSPEEDR_OSPEED7; // high speed
-	GPIOA->AFR[0] &= ~GPIO_AFRL_AFSEL7_Msk;
-	GPIOA->AFR[0] |= (GPIO_AF1_TIM3 << GPIO_AFRL_AFSEL7_Pos);
+    if (duty >= 100U) {
+        return arr;
+    }
 
-	// Enable TIM3 clock
-	RCC->APB1ENR1 |= RCC_APB1ENR1_TIM3EN;
-
-	// Configure timer for 1 MHz tick (1 us resolution)
-	uint32_t sysclk = SystemCoreClock; // requires CMSIS/HAL system init
-	uint32_t psc = (sysclk / 1000000UL);
-	if (psc == 0)
-		psc = 1;
-	TIM3->PSC = (uint16_t) (psc - 1);
-
-	// For center-aligned mode the effective ARR is half period ticks
-	uint32_t halfPeriod_us = (period_us / 2U);
-	if (halfPeriod_us == 0)
-		halfPeriod_us = 1; // avoid ARR==0
-	TIM3->ARR = (uint32_t) (halfPeriod_us - 1U);
-
-	// Set PWM duty (CCR1) using the half-period as the reference
-	TIM3->CCR1 = (uint32_t) ((halfPeriod_us * dutyCycle) / 100U);
-
-	// Configure channel 1 as PWM mode 1 and enable preload
-#ifndef TIM_OCMODE_PWM1
-#define TIM_OCMODE_PWM1 (TIM_CCMR1_OC1M_2 | TIM_CCMR1_OC1M_1)
-#endif
-	// Clear OC1M bits then set PWM1
-	TIM3->CCMR1 &= ~(TIM_CCMR1_OC1M);
-	TIM3->CCMR1 |= TIM_OCMODE_PWM1;
-	// Enable CCR1 preload (OC1PE), not OC1FE
-	TIM3->CCMR1 |= TIM_CCMR1_OC1PE;
-
-	// Enable auto-reload preload
-	TIM3->CR1 |= TIM_CR1_ARPE;
-
-	// Enable center-aligned mode 1 (CMS = 01)
-	TIM3->CR1 &= ~TIM_CR1_CMS;
-	TIM3->CR1 |= TIM_CR1_CMS_0;
-
-	// Clear polarity bit for active-high and enable output
-	TIM3->CCER &= ~(TIM_CCER_CC1P); // clear active high
-	TIM3->CCER |= TIM_CCER_CC1E;    // enable CH2 output
-
-	// Force update to load prescaler/ARR/CCR1 into shadow registers
-	TIM3->EGR = TIM_EGR_UG;
-
-	// Start timer
-	TIM3->CR1 |= TIM_CR1_CEN;
-
-	return PWM_OK;
+    return (arr * duty) / 100U;
 }
 
-/**
- * Checks the dutyCycle and and programs TIM3->CCR1. This function is safe to call while the timer is running; CCR1
- * preload is enabled so the new value will take effect at the next update
- * event.
- */
-PWMStatus setPWMDutyCyclePC(uint32_t dutyCycle) {
-	uint32_t halfPeriod = TIM3->ARR + 1; // ARR holds half-period in center-aligned mode
+PWMStatus pwm_init(uint32_t period_us)
+{
+    if (period_us == 0U) {
+        return PWM_INVALID_PERIOD;
+    }
 
-	// Check duty cycle
-	if (dutyCycle > halfPeriod)
-		return PWM_DC_TOO_HIGH;
-	if (dutyCycle < 0)
-		return PWM_DC_TOO_LOW;
-	// Else: Set PWM duty (CCR1) using the half-period as the reference
-	TIM3->CCR1 = dutyCycle;
+    /* Enable peripheral clocks */
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
+    RCC->APB1ENR1 |= RCC_APB1ENR1_TIM3EN;
 
-	return PWM_OK;
+    /* Small delay after enabling clocks */
+    __DSB();
+
+    /*
+     * Configure PA6 and PA7 as alternate function for TIM3
+     * PA6 = TIM3_CH1
+     * PA7 = TIM3_CH2
+     *
+     * On many STM32L4 parts this is AF2.
+     * Check your datasheet if your specific part differs.
+     */
+
+    /* MODER: alternate function mode */
+    GPIOA->MODER &= ~((3UL << (6U * 2U)) | (3UL << (7U * 2U)));
+    GPIOA->MODER |=  ((2UL << (6U * 2U)) | (2UL << (7U * 2U)));
+
+    /* OTYPER: push-pull */
+    GPIOA->OTYPER &= ~((1UL << 6U) | (1UL << 7U));
+
+    /* PUPDR: no pull */
+    GPIOA->PUPDR &= ~((3UL << (6U * 2U)) | (3UL << (7U * 2U)));
+
+    /* OSPEEDR: high speed */
+    GPIOA->OSPEEDR &= ~((3UL << (6U * 2U)) | (3UL << (7U * 2U)));
+    GPIOA->OSPEEDR |=  ((3UL << (6U * 2U)) | (3UL << (7U * 2U)));
+
+    /* AFRL: AF2 for PA6 and PA7 */
+    GPIOA->AFR[0] &= ~((0xFUL << (6U * 4U)) | (0xFUL << (7U * 4U)));
+    GPIOA->AFR[0] |=  ((2UL   << (6U * 4U)) | (2UL   << (7U * 4U)));
+
+    /* Stop timer before reconfiguring */
+    TIM3->CR1 = 0U;
+    TIM3->CCER = 0U;
+
+    /*
+     * Set timer tick to 1 MHz (1 us per count)
+     * timer_clk / (PSC + 1) = 1,000,000
+     */
+    uint32_t timer_clk = SystemCoreClock;
+    uint32_t psc = (timer_clk / 1000000UL);
+
+    if (psc == 0U) {
+        psc = 1U;
+    }
+
+    TIM3->PSC = (uint16_t)(psc - 1U);
+
+    /*
+     * Edge-aligned PWM:
+     * period_us = ARR + 1 at 1 MHz
+     */
+    TIM3->ARR = period_us - 1U;
+
+    /* Start both channels at 0% duty */
+    TIM3->CCR1 = 0U;
+    TIM3->CCR2 = 0U;
+
+    /*
+     * CH1 = PWM mode 1, preload enable
+     * CH2 = PWM mode 1, preload enable
+     */
+    TIM3->CCMR1 &= ~(
+        TIM_CCMR1_OC1M |
+        TIM_CCMR1_OC2M |
+        TIM_CCMR1_CC1S |
+        TIM_CCMR1_CC2S
+    );
+
+    TIM3->CCMR1 |=
+        (6UL << TIM_CCMR1_OC1M_Pos) |
+        TIM_CCMR1_OC1PE |
+        (6UL << TIM_CCMR1_OC2M_Pos) |
+        TIM_CCMR1_OC2PE;
+
+    /* Auto-reload preload enable */
+    TIM3->CR1 |= TIM_CR1_ARPE;
+
+    /* Active high polarity, enable CH1 and CH2 outputs */
+    TIM3->CCER &= ~(
+        TIM_CCER_CC1P |
+        TIM_CCER_CC2P
+    );
+    TIM3->CCER |= (
+        TIM_CCER_CC1E |
+        TIM_CCER_CC2E
+    );
+
+    /* Force update to load PSC/ARR/CCR */
+    TIM3->EGR = TIM_EGR_UG;
+
+    /* Start timer */
+    TIM3->CR1 |= TIM_CR1_CEN;
+
+    return PWM_OK;
 }
 
+PWMStatus update_duty_1(uint8_t duty)
+{
+    if (duty > PWM_MAX_DUTY_PC) {
+        return PWM_INVALID_DUTY;
+    }
+
+    TIM3->CCR1 = pwm_percent_to_ccr(duty);
+    return PWM_OK;
+}
+
+PWMStatus update_duty_2(uint8_t duty)
+{
+    if (duty > PWM_MAX_DUTY_PC) {
+        return PWM_INVALID_DUTY;
+    }
+
+    TIM3->CCR2 = pwm_percent_to_ccr(duty);
+    return PWM_OK;
+}

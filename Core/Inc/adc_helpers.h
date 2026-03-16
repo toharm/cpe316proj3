@@ -8,16 +8,13 @@
 #ifndef INC_ADC_HELPERS_H_
 #define INC_ADC_HELPERS_H_
 
-#define BUFFER_SIZE 4096
+#include "main.h"
 
-#define ADC_SAMPLE_RATE  1000.0f                     /* 1 kHz ADC     */
-#define BIN_RES          (ADC_SAMPLE_RATE / (float)N)    /* ~0.98 Hz/bin  */
-#define PID_RATE         1.0f                          /* 50 Hz loop    */
-#define ADVANCE          ((int)(ADC_SAMPLE_RATE / PID_RATE))  /* 80 samples */
-#define PID_DT           (1.0f / PID_RATE)
-
-extern volatile uint16_t adc_buffer[BUFFER_SIZE];
 
 void ADC_Init(void);
+uint16_t dma_get_write_index(void);
+void copy_latest_window(uint16_t*, uint16_t);
+
+
 
 #endif /* INC_ADC_HELPERS_H_ */

@@ -11,7 +11,7 @@
 void init_tim2(){
 	TIM2->PSC = 0;
 	RCC->APB1ENR1 |= (RCC_APB1ENR1_TIM2EN);
-	TIM2->ARR = 1999; //I want 16kHz. from 32Mhz, that's 2000
+	TIM2->ARR = 1999; //I want 8kHz. from 32Mhz, that's 4000
 	TIM2->CR2 &= ~TIM_CR2_MMS;
 	TIM2->CR2 |= (0x2U << TIM_CR2_MMS_Pos); // 0010 for trigger output
 	TIM2->EGR |= TIM_EGR_UG;                  // force update event, load registers

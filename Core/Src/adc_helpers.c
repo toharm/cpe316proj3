@@ -7,11 +7,13 @@
 
 
 #include <stdint.h>
+#include <string.h>
 #include "stm32l4xx.h"
 #include "adc_helpers.h"
+#include "main.h"
 
 
-volatile uint16_t adc_buffer[BUFFER_SIZE];
+static volatile uint16_t adc_buffer[BUFFER_SIZE];
 
 void ADC_Init(void)
 {
@@ -84,4 +86,25 @@ void ADC_Init(void)
 
     // do NOT software-start here if TIM2 is supposed to trigger each sample
     ADC1->CR |= ADC_CR_ADSTART;
+}
+uint16_t dma_get_write_index(void)
+{
+    uint16_t remaining = DMA1_Channel1->CNDTR;
+    uint16_t idx = BUFFER_SIZE - remaining;
+
+    if (idx >= BUFFER_SIZE) {
+        idx = 0;
+    }
+
+    return idx;
+}
+void copy_latest_window(uint16_t *dst, uint16_t end_index)
+{
+    uint16_t first_len = BUFFER_SIZE - end_index;
+
+    memcpy(dst, (const void *)&adc_buffer[end_index], first_len * sizeof(uint16_t));
+
+    if (end_index > 0) {
+        memcpy(&dst[first_len], (const void *)&adc_buffer[0], end_index * sizeof(uint16_t));
+    }
 }
