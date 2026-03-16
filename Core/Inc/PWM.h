@@ -1,13 +1,13 @@
 /**
  * @file PWM.h
- * @brief Simple PWM helper for TIM2 CH1 (PA5) and TIM2 CH2 (PA1) on STM32L4 series.
+ * @brief Simple PWM helper for TIM3 CH2 (PA7) and TIM3 CH2 (PA1) on STM32L4 series.
  * @version 1.1.0b+BasedOnv1.0.0Commit402f325
  * @author Noah
  * @author GitHub Copilot, GPT-4 mini, Ask mode
  * @author GitHub Copilot, GPT-5 mini, Agent mode
  *
- * This header declares stuff to configure TIM2 to produce a PWM
- * waveform on PA5 (TIM2_CH1) and PA1 (TIM2_CH2) using a 1 MHz timer tick
+ * This header declares stuff to configure TIM3 to produce a PWM
+ * waveform on PA7 (TIM3_CH2) using a 1 MHz timer tick
  * (1us resolution). The implementation expects SystemCoreClock to be set by
  * the system/HAL.
  */
@@ -33,10 +33,10 @@ typedef enum {
 } PWMStatus;
 
 /**
- * @brief Configure TIM2 channel 1 (PA5) for PWM output (center-aligned).
+ * @brief Configure TIM3 channel 1 (PA7) for PWM output (center-aligned).
  *
- * This function configures PA5 as TIM2_CH1 alternate function, enables the
- * TIM2 clock, and programs the timer to use a 1 MHz timebase (1 microsecond
+ * This function configures PA7 as TIM3_ch2 alternate function, enables the
+ * TIM3 clock, and programs the timer to use a 1 MHz timebase (1 microsecond
  * tick) in center-aligned counting mode. For center-aligned operation the
  * effective period in timer ticks is 2*(ARR+1), therefore ARR is set to
  * (period_us/2) - 1 and CCR1 is computed relative to the half-period (ARR+1).
@@ -53,7 +53,7 @@ PWMStatus setupPWM(uint32_t period_us, uint_fast16_t dutyCycle);
 /**
  * @brief Set PWM duty cycle (raw integer)
  *
- * Updates TIM2->CCR1 so the PWM duty matches the requested value. This uses
+ * Updates TIM3->CCR1 so the PWM duty matches the requested value. This uses
  * the currently programmed ARR to compute the pulse width.
  *
  * @param dutyCycle Duty cycle in ticks
